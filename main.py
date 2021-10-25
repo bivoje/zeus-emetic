@@ -257,6 +257,25 @@ def routine_select(conn):
     sed(data)
     raise
 
+  dept     = 1
+  name     = 2
+  stdno    = 3
+  date     = 4
+  time     = 5
+  temp     = 6
+  sympt    = 7
+  spc_ctnt = 13
+  gubun    = 14
+  #?        = 15
+
+  for row_ in ret[b'dsMain'][0:]:
+    row = [v.decode("utf-8") for v in row_]
+    s_date = f"{row[date][0:4]}-{row[date][4:6]}-{row[date][6:8]}"
+    s_time = row[time]
+    s_sympt= "".join("O" if x else "_" for x in row[sympt:sympt+6])
+    s_ctnt = row[spc_ctnt]
+    print("\t".join([s_date, s_time, s_sympt, s_ctnt]))
+
   return ret
 
 
@@ -313,5 +332,6 @@ def routine_save(conn, stdid, symp={'temp':36.5}):
 
 conn = http.client.HTTPSConnection(BASE_URL);
 routine_login(conn, user_id, user_pw)
-routine_save(conn, student_id)
+#routine_save(conn, student_id)
+ret = routine_select(conn)
 conn.close()
