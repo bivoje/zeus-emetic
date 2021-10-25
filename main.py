@@ -14,9 +14,6 @@ def sed(dat):
 BASE_URL = "zeus.gist.ac.kr"
 
 LOGIN_PATH  = "/sys/login/auth.do?callback="
-MAIN_PATH   = "/sys/main/main.do"
-USERENV_PATH= "/sys/main/userEnv.do"
-ROLE_PATH   = "/sys/main/role.do"
 SAVE_PATH   = "/amc/amcDailyTempRegE/save.do"
 SELECT_PATH = "/amc/amcDailyTempRegE/select.do"
 
@@ -219,77 +216,6 @@ def routine_login(conn, user_id, user_pw):
 
   print("login successful")
   return True
-
-
-def routine_main(conn):
-  print(f"getting to main ...");
-
-  headers = BASE_HEADERS.copy()
-  headers["Referer"] = 'https://' + BASE_URL + '/sys/main/login.do'
-  headers["Cookie"] = cookie_demon()
-  conn.request("GET", MAIN_PATH, "", headers)
-  response = conn.getresponse()
-
-  html = response.read()
-
-  if response.status != 200:
-    print("error")
-    print(response.status, response.reason)
-    print(data)
-    return None
-
-  return html
-
-
-def routine_userenv(conn):
-  print(f"getting user_env.do ...");
-
-  headers = BASE_HEADERS.copy()
-  headers["Referer"] = 'https://' + BASE_URL + '/index.html'
-  headers["Cookie"] = cookie_demon()
-  conn.request("GET", USERENV_PATH, "", headers)
-
-  html = response.read()
-
-  if response.status != 200:
-    print("error")
-    print(response.status, response.reason)
-    print(data)
-    return None
-
-  return html
-
-
-def routine_roll(conn):
-  info = [
-    ('WMONID',    COOKIES['WMONID']), # TODO what if error
-    ('pg_key',    ""),
-    ('pg_nm',     ""),
-    ('page_open_time', ""),
-    ('page_open_time_on', ""),
-  ]
-
-  params = nexacro_ssv_encode(info)
-  print(f"role.do with info {params} ...");
-
-  headers = BASE_HEADERS.copy()
-  headers["Referer"] = 'https://' + BASE_URL + '/index.html'
-  headers["Accept"] = "*/*"
-  headers["Content-Type"] = "text/plain;charset=UTF-8"
-  headers["Cookie"] = cookie_demon()
-  headers.pop("X-Requested-With", None)
-  conn.request("POST", ROLE_PATH, params, headers)
-
-  response = conn.getresponse()
-  data = response.read()
-
-  if response.status != 200:
-    print("error")
-    print(response.status, response.reason)
-    print(data)
-    return None
-
-  return nexacro_ssv_decode(data)
 
 
 def routine_select(conn):
