@@ -268,13 +268,11 @@ def routine_select(conn):
   gubun    = 14
   #?        = 15
 
-  for row_ in ret[b'dsMain'][0:]:
+  for row_ in ret[b'dsMain'][0:10]:
     row = [v.decode("utf-8") for v in row_]
     s_date = f"{row[date][0:4]}-{row[date][4:6]}-{row[date][6:8]}"
-    s_time = row[time]
     s_sympt= "".join("O" if x else "_" for x in row[sympt:sympt+6])
-    s_ctnt = row[spc_ctnt]
-    print("\t".join([s_date, s_time, s_sympt, s_ctnt]))
+    print("\t".join([s_date, row[time], row[temp], s_sympt, row[spc_ctnt]]))
 
   return ret
 
