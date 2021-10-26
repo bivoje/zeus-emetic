@@ -41,10 +41,6 @@ BASE_HEADERS = {
   "Accept-Language": 'ko-KR,ko;q=0.9',
 }
 
-user_id = ""
-user_pw = ""
-student_id = ""
-
 COOKIES = {}
 
 def cookie_monster(headers):
@@ -166,7 +162,7 @@ def nexacro_ssv_decode_dataset(vs, i):
 def nexacro_ssv_decode(bs):
   vs = bs.split(b'\x1e')
   nexacro_ssv_check_header(vs[0])
-  
+
   ret = {}
   i = 1
   while i < len(vs):
@@ -328,8 +324,57 @@ def routine_save(conn, stdid, symp={'temp':36.5}):
   return ret
 
 
-conn = http.client.HTTPSConnection(BASE_URL);
-routine_login(conn, user_id, user_pw)
-#routine_save(conn, student_id)
-ret = routine_select(conn)
-conn.close()
+import os
+
+DEFAULT_CONFIG_PATH = os.environ['HOME']+"/.emetic_config"
+DEFAULT_COOKIE_PATH = os.environ['HOME']+"/.emetic_cookie"
+
+if __name__ == "__main__":
+  import sys
+
+  if len(sys.argv) <= 1:
+    print("RTFM!")
+    exit(1)
+
+  if len(sys.argv) <= 2:
+    config_path = DEFAULT_CONFIG_PATH
+  else:
+    conifg_path = sys.argv[2]
+
+  try:
+    with open(config_path, "rb") as f:
+      config_loaded = json.load(f)
+  except OSError as e:
+    print(f"error while reading config file at {config_path}")
+    print(e)
+    exit(3)
+
+  config = {
+    'username': "", 'password': "",
+    'student_id': "",
+    'cookie_path': DEFAULT_COOKIE_PATH,
+    'temperature': "36.5",
+    # sympts? TODO
+  }
+  #}.update(config_loaded)
+
+  for (k,v) in config_loaded.items():
+    if not isinstance(v, str):
+      print(f"config value for entry '{k}' is not string")
+      # TODO temperature validating?
+      exit(3)
+    if k not in config:
+      print(f"unrecognized config entry '{k}'")
+      exit(3)
+    config[k] = v
+
+  conn = http.client.HTTPSConnection(BASE_URL);
+  routine_login(conn, config['username'], config['password'])
+
+  if sys.argv[1] == "save":
+    routine_save(conn, config['student_id')
+
+  elif sys.argv[1] == "select":
+    ret = routine_select(conn)
+
+  conn.close()
