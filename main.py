@@ -21,6 +21,8 @@ SSV_GUBUN  = "AA"
 SSV_DEPTCD = "0160"
 SSV_PGKEY  = "PERS07^PERS07_08^005^AmcDailyTempRegE"
 
+TIME_ZONE = timezone(timedelta(hours=9))
+
 # copy & pasted from chrome inspector
 # then :s/^\([^:]\+\):\s*\(.\+\)$/"\1": '\2',/g
 BASE_HEADERS = {
@@ -179,56 +181,58 @@ def nexacro_ssv_decode(bs):
   return ret
 
 
-def routine_login(conn, user_id, user_pw):
+def request_login(conn, user_id, user_pw):
   params = urlencode({'login_id':user_id, 'login_pw':user_pw}, safe='!*()')
-  print(f"login with {params}...");
-
   headers = BASE_HEADERS.copy()
   headers["Referer"] = 'https://' + BASE_URL + '/sys/main/login.do'
+
   conn.request("POST", LOGIN_PATH, params, headers)
   response = conn.getresponse()
-
   head = response.getheaders()
   cookie_monster(head)
-
   data = response.read()
 
   if response.status != 200:
-    print("login protocol error")
-    print(response.status, response.reason)
-    print(unquote(data.decode("utf-8")))
-    return False
+    raise ConnectionError(
+      f"server returned {response.status}, {response.reason}")
 
-  dat = json.loads(unquote(data.decode("utf-8")))
-  if dat.get('error_msg', ''):
-    print("login error")
-    print(dat['error_msg'])
-    return False
+  try:
+    dat = json.loads(unquote(data.decode("utf-8")))
+    assert(not dat.get('error_msg', ''))
+  except AssertionError:
+    raise ConnectionError(dat['error_msg'])
+  except e:
+    raise ValueError(f"error while parsing data '{data}'")
 
   if 'WMONID' not in COOKIES or 'ZSESSIONID' not in COOKIES:
-    print("login successfully failed ")
-    print(heads)
-    return False
+    raise ConnectionError(f"login successfully failed. '{head}'")
 
-  print("login successful")
   return True
 
 
-def routine_select(conn):
-  tz = timezone(timedelta(hours=9))
+def select_dumps(ret):
+  dept = 1; name = 2; stdno = 3; date = 4;
+  time = 5; temp = 6; sympt = 7;
+  spc_ctnt = 13; gubun = 14
+  #?        = 15
+  for row_ in ret[b'dsMain'][0:10]:
+    row = [v.decode("utf-8") for v in row_]
+    s_date = f"{row[date][0:4]}-{row[date][4:6]}-{row[date][6:8]}"
+    s_sympt= "".join("O" if x else "_" for x in row[sympt:sympt+6])
+    print("\t".join([s_date, row[time], row[temp], s_sympt, row[spc_ctnt]]))
 
+def request_select(conn):
+  assert('WMONID' in COOKIES)
   info = [
-    ('WMONID',    COOKIES['WMONID']), # TODO what if error
+    ('WMONID',    COOKIES['WMONID']),
     ('dept_cd',   SSV_DEPTCD),
-    ('chk_dt',    datetime.now(tz).strftime('%Y%m')),
+    ('chk_dt',    datetime.now(TIME_ZONE).strftime('%Y%m')),
     ('pg_key',    SSV_PGKEY),
     ('page_open_time', ""),
-    ('page_open_time_on', datetime.now(tz).strftime('%Y%m%d%H%M%S%f')),
+    ('page_open_time_on', datetime.now(TIME_ZONE).strftime('%Y%m%d%H%M%S%f')),
   ]
 
   params = nexacro_ssv_encode(info)
-  print(f"selecting info {params} ...");
-
   headers = BASE_HEADERS.copy()
   headers["Referer"] = 'https://' + BASE_URL + '/index.html'
   headers["Accept"] = "*/*"
@@ -238,49 +242,27 @@ def routine_select(conn):
 
   conn.request("POST", SELECT_PATH, params, headers)
   response = conn.getresponse()
+  head = response.getheaders()
+  cookie_monster(head)
   data = response.read()
 
   if response.status != 200:
-    print("error")
-    print(response.status, response.reason)
-    print(data)
-    return None
+    raise ConnectionError(
+      f"server returned {response.status}, {response.reason}")
 
-  try:
-    ret = nexacro_ssv_decode(data)
-  except ValueError as e:
-    print("error")
-    sed(data)
-    raise
-
-  dept     = 1
-  name     = 2
-  stdno    = 3
-  date     = 4
-  time     = 5
-  temp     = 6
-  sympt    = 7
-  spc_ctnt = 13
-  gubun    = 14
-  #?        = 15
-
-  for row_ in ret[b'dsMain'][0:10]:
-    row = [v.decode("utf-8") for v in row_]
-    s_date = f"{row[date][0:4]}-{row[date][4:6]}-{row[date][6:8]}"
-    s_sympt= "".join("O" if x else "_" for x in row[sympt:sympt+6])
-    print("\t".join([s_date, row[time], row[temp], s_sympt, row[spc_ctnt]]))
-
+  ret = nexacro_ssv_decode(data)
+  if b'dsMain' not in ret:
+    raise ValueError(f"expecting 'dsMain' got '{ret}'")
   return ret
 
 
-def routine_save(conn, stdid, symp={'temp':36.5}):
-  tz = timezone(timedelta(hours=9))
-
+def request_save(conn, student_id, symp={'temp':36.5}):
+  assert('WMONID' in COOKIES)
   info = [
-    ('WMONID',    COOKIES['WMONID']), # TODO what if error
+    ('WMONID',    COOKIES['WMONID']),
     ('dept_cd',   SSV_DEPTCD),
     ('mbr_no',    student_id),
-    ('chk_dt',    datetime.now(tz).strftime('%Y-%m-%d')),
+    ('chk_dt',    datetime.now(TIME_ZONE).strftime('%Y-%m-%d')),
     ('temp',      f"{symp['temp']:.1f}"), # TODO catch error
     ('sympt_1',   'Y' if symp.get('cough', False) else 'N'),
     ('sympt_2',   'Y' if symp.get('soret', False) else 'N'),
@@ -292,36 +274,29 @@ def routine_save(conn, stdid, symp={'temp':36.5}):
     ('gubun',     SSV_GUBUN),
     ('pg_key',    SSV_PGKEY),
     ('page_open_time', ""),
-    ('page_open_time_on', datetime.now(tz).strftime('%Y%m%d%H%M%S%f')),
+    ('page_open_time_on', datetime.now(TIME_ZONE).strftime('%Y%m%d%H%M%S%f')),
   ]
 
   params = nexacro_ssv_encode(info)
-  print(f"saving info {params} ...");
-
   headers = BASE_HEADERS.copy()
   headers["Referer"] = 'https://' + BASE_URL + '/index.html'
   headers["Accept"] = "*/*"
   headers["Content-Type"] = "text/plain;charset=UTF-8"
   headers["Cookie"] = cookie_demon()
   headers.pop("X-Requested-With", None)
+
   conn.request("POST", SAVE_PATH, params, headers)
   response = conn.getresponse()
+  head = response.getheaders()
+  cookie_monster(head)
   data = response.read()
 
   if response.status != 200:
-    print("error")
-    print(response.status, response.reason)
-    print(data)
-    return None
+    raise ConnectionError(
+      f"server returned {response.status}, {response.reason}")
 
-  try:
-    ret = nexacro_ssv_decode(data)
-  except ValueError as e:
-    print("error")
-    sed(data)
-    raise
-
-  return ret
+  ret = nexacro_ssv_decode(data)
+  return ret # TODO validity check?
 
 
 import os
@@ -342,7 +317,7 @@ if __name__ == "__main__":
     conifg_path = sys.argv[2]
 
   try:
-    with open(config_path, "rb") as f:
+    with open(config_path, "rt") as f:
       config_loaded = json.load(f)
   except OSError as e:
     print(f"error while reading config file at {config_path}")
@@ -369,12 +344,13 @@ if __name__ == "__main__":
     config[k] = v
 
   conn = http.client.HTTPSConnection(BASE_URL);
-  routine_login(conn, config['username'], config['password'])
+  request_login(conn, config['username'], config['password'])
 
   if sys.argv[1] == "save":
-    routine_save(conn, config['student_id')
+    ret = request_save(conn, config['student_id'])
 
   elif sys.argv[1] == "select":
-    ret = routine_select(conn)
+    ret = request_select(conn)
+    select_dumps(ret)
 
   conn.close()
