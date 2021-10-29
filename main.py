@@ -222,7 +222,7 @@ def select_dumps(ret):
     print("\t".join([s_date, row[time], row[temp], s_sympt, row[spc_ctnt]]))
 
 def request_select(conn):
-  assert('WMONID' in COOKIES)
+  assert('WMONID' in COOKIES) # verified by request_login
   info = [
     ('WMONID',    COOKIES['WMONID']),
     ('dept_cd',   SSV_DEPTCD),
@@ -257,7 +257,7 @@ def request_select(conn):
 
 
 def request_save(conn, student_id, symp={'temp':36.5}):
-  assert('WMONID' in COOKIES)
+  assert('WMONID' in COOKIES) # verified by request_login
   info = [
     ('WMONID',    COOKIES['WMONID']),
     ('dept_cd',   SSV_DEPTCD),
@@ -299,6 +299,85 @@ def request_save(conn, student_id, symp={'temp':36.5}):
   return ret # TODO validity check?
 
 
+def load_config(path):
+  with open(path, "rt") as f:
+    config_loaded = json.load(f)
+
+  DEFAULT_CONFIG = {
+    'username': str,
+    'password': str,
+    'student_id': str,
+    'cookie_path': DEFAULT_COOKIE_PATH,
+    'temperature': 36.5,
+    'cough': False,
+    '?sore_throat': False,
+    '?dyspn': False,
+    'fever': False,
+    '?losat': False,
+    '?orsym': False,
+    '?orsym': False,
+  #}.update(config_loaded)
+  }
+
+  for (k,v) in DEFAULT_CONFIG.items():
+    if isinstance(v, type):
+      # default value is not present, required field
+      value_type = v
+      if k not in config_loaded:
+        raise ValueError(f"field {k} is required but missing")
+      value = config_loaded.pop(k, None)
+    else:
+      # default value is present, optional field
+      value_type = type(v)
+      value = config_loaded.pop(k, v)
+
+    if not isinstance(value, value_type):
+      raise ValueError(f"field {k} should be of type {value_type.__name__} but is {value.__class__.__name__}")
+
+    config[k] = value
+
+  if config_loaded: # config_loaded \notin DEFAULT_CONFIG
+    entry = 'entry' if len(config_loaded) == 1 else 'entries'
+    es = ', '.join(f"'{e}'" for e in config_loaded)
+    raise ValueError(f"unrecognized config {entry} {es}")
+
+  #return (config, config_loaded)
+  return config # TODO should this function return resting (unrecognized) entries to the caller insted of hadling it by itself?
+
+
+def routine_load_cookies(path):
+  try:
+    with open(path, "rt") as f:
+      cookies = json.load(f)
+  except (FileNotFoundError, json.decoder.JSONDecodeError):
+    cookies = {}
+  except OSError as e:
+    print(f"error while reading cookie file '{path}'")
+    print(e)
+    exit(3) # FIXME SHOULD WE
+
+  # FIXME, when COOKIES is not needed to be global, by enclosed in
+  # requesting class, we can simply return the value.
+  # till then, we hide COOKIES from main routine
+  COOKIES = cookies
+
+def routine_store_cookies(path):
+  try:
+    with open(config['cookie_path'], "wt") as f:
+      json.dump(COOKIES, f, indent=2)
+  except OSError as e:
+    print(f"error while writing to cookie file '{path}'")
+    print(e)
+    exit(3) # FIXME SHOULD WE?
+
+def routine_execute_command(cmd):
+  if sys.argv[1] == "save":
+    ret = request_save(conn, config['student_id'])
+
+  elif sys.argv[1] == "select":
+    ret = request_select(conn)
+    select_dumps(ret)
+
 import os
 
 DEFAULT_CONFIG_PATH = os.environ['HOME']+"/.emetic_config"
@@ -317,40 +396,19 @@ if __name__ == "__main__":
     conifg_path = sys.argv[2]
 
   try:
-    with open(config_path, "rt") as f:
-      config_loaded = json.load(f)
+    config = routine_load_config(config_path)
   except OSError as e:
     print(f"error while reading config file at {config_path}")
     print(e)
     exit(3)
 
-  config = {
-    'username': "", 'password': "",
-    'student_id': "",
-    'cookie_path': DEFAULT_COOKIE_PATH,
-    'temperature': "36.5",
-    # sympts? TODO
-  }
-  #}.update(config_loaded)
-
-  for (k,v) in config_loaded.items():
-    if not isinstance(v, str):
-      print(f"config value for entry '{k}' is not string")
-      # TODO temperature validating?
-      exit(3)
-    if k not in config:
-      print(f"unrecognized config entry '{k}'")
-      exit(3)
-    config[k] = v
+  routine_load_cookies(config['cookie_path'])
 
   conn = http.client.HTTPSConnection(BASE_URL);
   request_login(conn, config['username'], config['password'])
 
-  if sys.argv[1] == "save":
-    ret = request_save(conn, config['student_id'])
-
-  elif sys.argv[1] == "select":
-    ret = request_select(conn)
-    select_dumps(ret)
+  routine_execute_command(cmd):
 
   conn.close()
+
+  routine_store_cookies(config['cookie_path'])
