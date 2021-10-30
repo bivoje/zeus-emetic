@@ -5,54 +5,6 @@ import json
 from urllib.parse import urlencode, unquote # urlparse, parse_qs
 from datetime import datetime, timezone, timedelta
 
-# for debugging
-errdat = None
-def sed(dat):
-  global errdat
-  errdat = dat
-
-BASE_URL = "zeus.gist.ac.kr"
-
-LOGIN_PATH  = "/sys/login/auth.do?callback="
-SAVE_PATH   = "/amc/amcDailyTempRegE/save.do"
-SELECT_PATH = "/amc/amcDailyTempRegE/select.do"
-
-SSV_GUBUN  = "AA"
-SSV_DEPTCD = "0160"
-SSV_PGKEY  = "PERS07^PERS07_08^005^AmcDailyTempRegE"
-
-TIME_ZONE = timezone(timedelta(hours=9))
-
-# copy & pasted from chrome inspector
-# then :s/^\([^:]\+\):\s*\(.\+\)$/"\1": '\2',/g
-BASE_HEADERS = {
-  "Host": BASE_URL,
-  "Connection": 'keep-alive',
-  "sec-ch-ua": '"Chromium";v="94", "Google Chrome";v="94", ";Not A Brand";v="99"',
-  "Accept": 'application/json, text/javascript, */*; q=0.01',
-  "Content-Type": 'application/x-www-form-urlencoded; charset=UTF-8',
-  "X-Requested-With": 'XMLHttpRequest',
-  "sec-ch-ua-mobile": '?0',
-  "User-Agent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36',
-  "sec-ch-ua-platform": '"Windows"',
-  "Origin": 'https://' + BASE_URL,
-  "Sec-Fetch-Site": 'same-origin',
-  "Sec-Fetch-Mode": 'cors',
-  "Sec-Fetch-Dest": 'empty',
-  "Accept-Encoding": 'gzip, deflate, br',
-  "Accept-Language": 'ko-KR,ko;q=0.9',
-}
-
-COOKIES = {}
-
-def cookie_monster(headers):
-  for cookie in (hv for (hf,hv) in headers if hf == "Set-Cookie"):
-    cookie_content = cookie.split(';')[0]
-    (cf,cv) = cookie_content.split('=', 1)
-    COOKIES[cf.strip()] = cv.strip()
-
-def cookie_demon():
-  return "; ".join(f"{cf}={cv}" for (cf,cv) in COOKIES.items())
 
 def decode_xml_error(bs):
   import xml.etree.ElementTree as elemTree
@@ -66,6 +18,7 @@ def nexacro_ssv_encode(info, enc="utf-8"):
   rs = '\x1e' # record separator
   return f"SSV:{enc}{rs}" + rs.join(f"{f}={v}" for (f,v) in info)
 
+# TODO use regex if we want smaller code
 def nexacro_ssv_check_header(s):
   ss = s.split(b':')
   if len(ss) > 0 and ss[0] == b'SSV':
@@ -181,33 +134,173 @@ def nexacro_ssv_decode(bs):
   return ret
 
 
-def request_login(conn, user_id, user_pw):
-  params = urlencode({'login_id':user_id, 'login_pw':user_pw}, safe='!*()')
-  headers = BASE_HEADERS.copy()
-  headers["Referer"] = 'https://' + BASE_URL + '/sys/main/login.do'
+class ZeusRequest:
 
-  conn.request("POST", LOGIN_PATH, params, headers)
-  response = conn.getresponse()
-  head = response.getheaders()
-  cookie_monster(head)
-  data = response.read()
+  # static vars
+  TIME_ZONE = timezone(timedelta(hours=9))
 
-  if response.status != 200:
-    raise ConnectionError(
-      f"server returned {response.status}, {response.reason}")
+  BASE_URL = "zeus.gist.ac.kr"
 
-  try:
-    dat = json.loads(unquote(data.decode("utf-8")))
-    assert(not dat.get('error_msg', ''))
-  except AssertionError:
-    raise ConnectionError(dat['error_msg'])
-  except e:
-    raise ValueError(f"error while parsing data '{data}'")
+  LOGIN_PATH  = "/sys/login/auth.do?callback="
+  SAVE_PATH   = "/amc/amcDailyTempRegE/save.do"
+  SELECT_PATH = "/amc/amcDailyTempRegE/select.do"
 
-  if 'WMONID' not in COOKIES or 'ZSESSIONID' not in COOKIES:
-    raise ConnectionError(f"login successfully failed. '{head}'")
+  SSV_GUBUN  = "AA"
+  SSV_DEPTCD = "0160"
+  SSV_PGKEY  = "PERS07^PERS07_08^005^AmcDailyTempRegE"
 
-  return True
+  # copy & pasted from chrome inspector
+  # then :s/^\([^:]\+\):\s*\(.\+\)$/"\1": '\2',/g
+  # and removed some fields
+  BASE_HEADERS = {
+    "Host": BASE_URL,
+    "Connection": 'keep-alive',
+    "sec-ch-ua": '"Chromium";v="94", "Google Chrome";v="94", ";Not A Brand";v="99"',
+    "Accept": 'application/json, text/javascript, */*; q=0.01',
+    "Content-Type": 'application/x-www-form-urlencoded; charset=UTF-8',
+    "X-Requested-With": 'XMLHttpRequest',
+    "sec-ch-ua-mobile": '?0',
+    "User-Agent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36',
+    "sec-ch-ua-platform": '"Windows"',
+    "Origin": 'https://' + BASE_URL,
+    "Sec-Fetch-Site": 'same-origin',
+    "Sec-Fetch-Mode": 'cors',
+    "Sec-Fetch-Dest": 'empty',
+    "Accept-Encoding": 'gzip, deflate, br',
+    "Accept-Language": 'ko-KR,ko;q=0.9',
+  }
+
+  def __init__(self, cached_cookies={}):
+    self.conn = http.client.HTTPSConnection(self.BASE_URL);
+    self.cookies = cached_cookies
+    self.last_response = None
+
+  def __enter__(self):
+    return self
+
+  def __exit__(self):
+    self.conn.close()
+
+
+  def cookie_monster(self, headers):
+    for cookie in (hv for (hf,hv) in headers if hf == "Set-Cookie"):
+      cookie_content = cookie.split(';')[0]
+      (cf,cv) = cookie_content.split('=', 1)
+      self.cookies[cf.strip()] = cv.strip()
+
+  def cookie_demon(self):
+    return "; ".join(f"{cf}={cv}" for (cf,cv) in self.cookies.items())
+
+
+  def request_login(self, user_id, user_pw):
+    params = urlencode({
+      'login_id': user_id, 'login_pw': user_pw
+    }, safe='!*()')
+    headers = self.BASE_HEADERS.copy()
+    headers["Cookie"] = self.cookie_demon()
+    headers["Referer"] = 'https://' + self.BASE_URL + '/sys/main/login.do'
+
+    self.conn.request("POST", self.LOGIN_PATH, params, headers)
+    response = self.conn.getresponse()
+    head = response.getheaders()
+    self.cookie_monster(head)
+    data = response.read()
+    self.last_response = response
+
+    if response.status != 200:
+      raise ConnectionError(
+        f"server returned {response.status}, {response.reason}")
+
+    try:
+      dat = json.loads(unquote(data.decode("utf-8")))
+      assert(not dat.get('error_msg', ''))
+    except AssertionError:
+      raise ConnectionError(dat['error_msg'])
+    except e:
+      raise ValueError(f"error while parsing data '{data}'")
+
+    if 'WMONID' not in self.cookies or 'ZSESSIONID' not in self.cookies:
+      raise ConnectionError(f"login successfully failed. '{head}'")
+
+
+  def request_select(self):
+    assert('WMONID' in self.cookies) # verified by request_login
+    info = [
+      ('WMONID',    self.cookies['WMONID']),
+      ('dept_cd',   self.SSV_DEPTCD),
+      ('chk_dt',    datetime.now(self.TIME_ZONE).strftime('%Y%m')),
+      ('pg_key',    self.SSV_PGKEY),
+      ('page_open_time', ""),
+      ('page_open_time_on', datetime.now(self.TIME_ZONE).strftime('%Y%m%d%H%M%S%f')),
+    ]
+
+    params = nexacro_ssv_encode(info)
+    headers = self.BASE_HEADERS.copy()
+    headers["Referer"] = 'https://' + self.BASE_URL + '/index.html'
+    headers["Accept"] = "*/*"
+    headers["Content-Type"] = "text/plain;charset=UTF-8"
+    headers["Cookie"] = self.cookie_demon()
+    headers.pop("X-Requested-With", None)
+
+    self.conn.request("POST", self.SELECT_PATH, params, headers)
+    response = self.conn.getresponse()
+    head = response.getheaders()
+    self.cookie_monster(head)
+    data = response.read()
+    self.last_response = response
+
+    if response.status != 200:
+      raise ConnectionError(
+        f"server returned {response.status}, {response.reason}")
+
+    ret = nexacro_ssv_decode(data)
+    if b'dsMain' not in ret:
+      raise ValueError(f"expecting 'dsMain' got '{ret}'")
+
+    return ret
+
+
+  def request_save(self, student_id, symp={'temp':36.5}):
+    assert('WMONID' in self.cookies) # verified by request_login
+    info = [
+      ('WMONID',    self.cookies['WMONID']),
+      ('dept_cd',   self.SSV_DEPTCD),
+      ('mbr_no',    student_id),
+      ('chk_dt',    datetime.now(self.TIME_ZONE).strftime('%Y-%m-%d')),
+      ('temp',      f"{symp['temp']:.1f}"), # TODO catch error
+      ('sympt_1',   'Y' if symp.get('cough', False) else 'N'),
+      ('sympt_2',   'Y' if symp.get('soret', False) else 'N'),
+      ('sympt_3',   'Y' if symp.get('dyspn', False) else 'N'),
+      ('sympt_4',   'Y' if symp.get('fever', False) else 'N'),
+      ('sympt_5',   'Y' if symp.get('losat', False) else 'N'),
+      ('sympt_6',   'Y' if symp.get('orsym', False) else 'N'),
+      ('spc_ctnt',  symp.get('special', "")),
+      ('gubun',     self.SSV_GUBUN),
+      ('pg_key',    self.SSV_PGKEY),
+      ('page_open_time', ""),
+      ('page_open_time_on', datetime.now(self.TIME_ZONE).strftime('%Y%m%d%H%M%S%f')),
+    ]
+
+    params = nexacro_ssv_encode(info)
+    headers = self.BASE_HEADERS.copy()
+    headers["Referer"] = 'https://' + self.BASE_URL + '/index.html'
+    headers["Accept"] = "*/*"
+    headers["Content-Type"] = "text/plain;charset=UTF-8"
+    headers["Cookie"] = self.cookie_demon()
+    headers.pop("X-Requested-With", None)
+
+    self.conn.request("POST", self.SAVE_PATH, params, headers)
+    response = self.conn.getresponse()
+    head = response.getheaders()
+    self.cookie_monster(head)
+    data = response.read()
+
+    if response.status != 200:
+      raise ConnectionError(
+        f"server returned {response.status}, {response.reason}")
+
+    ret = nexacro_ssv_decode(data)
+    return ret # TODO validity check?
 
 
 def select_dumps(ret):
@@ -221,82 +314,6 @@ def select_dumps(ret):
     s_sympt= "".join("O" if x else "_" for x in row[sympt:sympt+6])
     print("\t".join([s_date, row[time], row[temp], s_sympt, row[spc_ctnt]]))
 
-def request_select(conn):
-  assert('WMONID' in COOKIES) # verified by request_login
-  info = [
-    ('WMONID',    COOKIES['WMONID']),
-    ('dept_cd',   SSV_DEPTCD),
-    ('chk_dt',    datetime.now(TIME_ZONE).strftime('%Y%m')),
-    ('pg_key',    SSV_PGKEY),
-    ('page_open_time', ""),
-    ('page_open_time_on', datetime.now(TIME_ZONE).strftime('%Y%m%d%H%M%S%f')),
-  ]
-
-  params = nexacro_ssv_encode(info)
-  headers = BASE_HEADERS.copy()
-  headers["Referer"] = 'https://' + BASE_URL + '/index.html'
-  headers["Accept"] = "*/*"
-  headers["Content-Type"] = "text/plain;charset=UTF-8"
-  headers["Cookie"] = cookie_demon()
-  headers.pop("X-Requested-With", None)
-
-  conn.request("POST", SELECT_PATH, params, headers)
-  response = conn.getresponse()
-  head = response.getheaders()
-  cookie_monster(head)
-  data = response.read()
-
-  if response.status != 200:
-    raise ConnectionError(
-      f"server returned {response.status}, {response.reason}")
-
-  ret = nexacro_ssv_decode(data)
-  if b'dsMain' not in ret:
-    raise ValueError(f"expecting 'dsMain' got '{ret}'")
-  return ret
-
-
-def request_save(conn, student_id, symp={'temp':36.5}):
-  assert('WMONID' in COOKIES) # verified by request_login
-  info = [
-    ('WMONID',    COOKIES['WMONID']),
-    ('dept_cd',   SSV_DEPTCD),
-    ('mbr_no',    student_id),
-    ('chk_dt',    datetime.now(TIME_ZONE).strftime('%Y-%m-%d')),
-    ('temp',      f"{symp['temp']:.1f}"), # TODO catch error
-    ('sympt_1',   'Y' if symp.get('cough', False) else 'N'),
-    ('sympt_2',   'Y' if symp.get('soret', False) else 'N'),
-    ('sympt_3',   'Y' if symp.get('dyspn', False) else 'N'),
-    ('sympt_4',   'Y' if symp.get('fever', False) else 'N'),
-    ('sympt_5',   'Y' if symp.get('losat', False) else 'N'),
-    ('sympt_6',   'Y' if symp.get('orsym', False) else 'N'),
-    ('spc_ctnt',  symp.get('special', "")),
-    ('gubun',     SSV_GUBUN),
-    ('pg_key',    SSV_PGKEY),
-    ('page_open_time', ""),
-    ('page_open_time_on', datetime.now(TIME_ZONE).strftime('%Y%m%d%H%M%S%f')),
-  ]
-
-  params = nexacro_ssv_encode(info)
-  headers = BASE_HEADERS.copy()
-  headers["Referer"] = 'https://' + BASE_URL + '/index.html'
-  headers["Accept"] = "*/*"
-  headers["Content-Type"] = "text/plain;charset=UTF-8"
-  headers["Cookie"] = cookie_demon()
-  headers.pop("X-Requested-With", None)
-
-  conn.request("POST", SAVE_PATH, params, headers)
-  response = conn.getresponse()
-  head = response.getheaders()
-  cookie_monster(head)
-  data = response.read()
-
-  if response.status != 200:
-    raise ConnectionError(
-      f"server returned {response.status}, {response.reason}")
-
-  ret = nexacro_ssv_decode(data)
-  return ret # TODO validity check?
 
 
 def load_config(path):
@@ -348,18 +365,13 @@ def load_config(path):
 def routine_load_cookies(path):
   try:
     with open(path, "rt") as f:
-      cookies = json.load(f)
+      return json.load(f)
   except (FileNotFoundError, json.decoder.JSONDecodeError):
-    cookies = {}
+    return {}
   except OSError as e:
     print(f"error while reading cookie file '{path}'")
     print(e)
     exit(3) # FIXME SHOULD WE
-
-  # FIXME, when COOKIES is not needed to be global, by enclosed in
-  # requesting class, we can simply return the value.
-  # till then, we hide COOKIES from main routine
-  COOKIES = cookies
 
 def routine_store_cookies(path):
   try:
@@ -402,13 +414,9 @@ if __name__ == "__main__":
     print(e)
     exit(3)
 
-  routine_load_cookies(config['cookie_path'])
+  cookies = routine_load_cookies(config['cookie_path'])
 
-  conn = http.client.HTTPSConnection(BASE_URL);
-  request_login(conn, config['username'], config['password'])
-
-  routine_execute_command(cmd):
-
-  conn.close()
-
-  routine_store_cookies(config['cookie_path'])
+  with ZeusRequest(BASE_URL, cookies) as zrq:
+    zrq.request_login(config['username'], config['password'])
+    routine_execute_command(cmd):
+    routine_store_cookies(config['cookie_path'])
