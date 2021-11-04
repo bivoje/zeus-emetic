@@ -174,11 +174,12 @@ class ZeusRequest:
     self.conn = http.client.HTTPSConnection(self.BASE_URL);
     self.cookies = cached_cookies
     self.last_response = None
+    self.last_data = None
 
   def __enter__(self):
     return self
 
-  def __exit__(self):
+  def __exit__(self, exc_type, exc_value, traceback):
     self.conn.close()
 
 
@@ -206,6 +207,7 @@ class ZeusRequest:
     self.cookie_monster(head)
     data = response.read()
     self.last_response = response
+    self.last_data = data
 
     if response.status != 200:
       raise ConnectionError(
@@ -224,7 +226,9 @@ class ZeusRequest:
 
 
   def request_select(self):
-    assert('WMONID' in self.cookies) # verified by request_login
+    if 'WMONID' not in self.cookies:
+      raise ConnectionRefusedError # need log-in
+
     info = [
       ('WMONID',    self.cookies['WMONID']),
       ('dept_cd',   self.SSV_DEPTCD),
@@ -248,12 +252,19 @@ class ZeusRequest:
     self.cookie_monster(head)
     data = response.read()
     self.last_response = response
+    self.last_data = data
 
     if response.status != 200:
       raise ConnectionError(
         f"server returned {response.status}, {response.reason}")
 
     ret = nexacro_ssv_decode(data)
+
+    if b'ErrorMsg' in ret:
+      if ret.get(b'ErrorCode', "") == b'4000':
+        raise ConnectionRefusedError # re-login needed
+      raise ConnectionError(ret[b'ErrorMsg'])
+
     if b'dsMain' not in ret:
       raise ValueError(f"expecting 'dsMain' got '{ret}'")
 
@@ -261,7 +272,9 @@ class ZeusRequest:
 
 
   def request_save(self, student_id, symp={'temp':36.5}):
-    assert('WMONID' in self.cookies) # verified by request_login
+    if 'WMONID' not in self.cookies:
+      raise ConnectionRefusedError # need log-in
+
     info = [
       ('WMONID',    self.cookies['WMONID']),
       ('dept_cd',   self.SSV_DEPTCD),
@@ -300,7 +313,11 @@ class ZeusRequest:
         f"server returned {response.status}, {response.reason}")
 
     ret = nexacro_ssv_decode(data)
-    return ret # TODO validity check?
+
+    if b'ErrorMsg' in ret:
+      if ret.get(b'ErrorCode', "") == b'4000':
+        raise ConnectionRefusedError # re-login needed
+      raise ConnectionError(ret[b'ErrorMsg'])
 
 
 def select_dumps(ret):
@@ -312,29 +329,44 @@ def select_dumps(ret):
     row = [v.decode("utf-8") for v in row_]
     s_date = f"{row[date][0:4]}-{row[date][4:6]}-{row[date][6:8]}"
     s_sympt= "".join("O" if x else "_" for x in row[sympt:sympt+6])
-    print("\t".join([s_date, row[time], row[temp], s_sympt, row[spc_ctnt]]))
+    print("\t".join([s_date, row[time], row[temp], s_sympt, row[spc_ctnt]])) # TODO return string
 
 
+def routine_args(argv):
+  if len(argv) <= 1:
+    print("RTFM!", file=sys.stderr)
+    exit(1)
+
+  cmd = argv[1]
+
+  if len(argv) <= 2:
+    config_path = DEFAULT_CONFIG_PATH
+  else:
+    config_path = argv[2]
+
+  return (cmd, config_path)
 
 def load_config(path):
   with open(path, "rt") as f:
     config_loaded = json.load(f)
 
   DEFAULT_CONFIG = {
+    'verbose': True,
     'username': str,
     'password': str,
     'student_id': str,
     'cookie_path': DEFAULT_COOKIE_PATH,
     'temperature': 36.5,
     'cough': False,
-    '?sore_throat': False,
-    '?dyspn': False,
+    'sore_throat': False,
+    'dyspnea': False,
     'fever': False,
-    '?losat': False,
-    '?orsym': False,
-    '?orsym': False,
+    'no_smell_or_taste': False,
+    'other_symptoms': False,
   #}.update(config_loaded)
   }
+
+  config = {}
 
   for (k,v) in DEFAULT_CONFIG.items():
     if isinstance(v, type):
@@ -362,6 +394,17 @@ def load_config(path):
   return config # TODO should this function return resting (unrecognized) entries to the caller insted of hadling it by itself?
 
 
+def routine_load_config(path):
+  try:
+    return load_config(path)
+  except json.decoder.JSONDecodeError as e:
+    print(f"error while reading config. {e}", file=sys.stderr)
+    exit(3)
+  except OSError as e:
+    print(f"error while reading config file at {path}", file=sys.stderr)
+    print(e, file=sys.stderr)
+    exit(3)
+
 def routine_load_cookies(path):
   try:
     with open(path, "rt") as f:
@@ -369,54 +412,68 @@ def routine_load_cookies(path):
   except (FileNotFoundError, json.decoder.JSONDecodeError):
     return {}
   except OSError as e:
-    print(f"error while reading cookie file '{path}'")
-    print(e)
+    print(f"error while reading cookie file '{path}'", file=sys.stderr)
+    print(e, file=sys.stderr)
     exit(3) # FIXME SHOULD WE
 
-def routine_store_cookies(path):
+def routine_store_cookies(cookies, config):
   try:
     with open(config['cookie_path'], "wt") as f:
-      json.dump(COOKIES, f, indent=2)
+      json.dump(cookies, f, indent=2)
   except OSError as e:
-    print(f"error while writing to cookie file '{path}'")
-    print(e)
+    print(f"error while writing to cookie file '{path}'", file=sys.stderr)
+    print(e, file=sys.stderr)
     exit(3) # FIXME SHOULD WE?
 
-def routine_execute_command(cmd):
-  if sys.argv[1] == "save":
-    ret = request_save(conn, config['student_id'])
+def routine_login(zrq, config):
+  if config['verbose']: print("try loging in... ", end='', flush=True)
+  try:
+    ret = zrq.request_login(config['username'], config['password'])
+  except ConnectionError as e:
+    if config['verbose']: print("failed")
+    print(e, file=sys.stderr)
+    exit(4)
+  if config['verbose']: print("success")
 
-  elif sys.argv[1] == "select":
-    ret = request_select(conn)
+def execute_command(zrq, config, cmd):
+  if cmd == "save":
+    if config['verbose']: print("uploading temperature data... ", end='', flush=True)
+    ret = zrq.request_save(config['student_id'])
+    if config['verbose']: print("success")
+
+  elif cmd == "select":
+    if config['verbose']: print("loading temperature data... ", end='', flush=True)
+    ret = zrq.request_select()
+    if config['verbose']: print("success")
     select_dumps(ret)
 
+  elif cmd == "upd":
+    pass
+    #ret = zrq.request_select()
+    #for row in ret if strptime row[4]
+    #ret = zrq.request_save(config['student_id'])
+
+def routine_execute_command(zrq, config, cmd, chance=2):
+  while chance > 0:
+    try:
+      execute_command(zrq, config, cmd)
+      break # success
+    except ConnectionRefusedError: # re-login needed
+      if config['verbose']: print("login cookie rejected")
+      chance -= 1
+      routine_login(zrq, config)
+
+
 import os
+import sys
 
 DEFAULT_CONFIG_PATH = os.environ['HOME']+"/.emetic_config"
 DEFAULT_COOKIE_PATH = os.environ['HOME']+"/.emetic_cookie"
 
 if __name__ == "__main__":
-  import sys
-
-  if len(sys.argv) <= 1:
-    print("RTFM!")
-    exit(1)
-
-  if len(sys.argv) <= 2:
-    config_path = DEFAULT_CONFIG_PATH
-  else:
-    conifg_path = sys.argv[2]
-
-  try:
-    config = routine_load_config(config_path)
-  except OSError as e:
-    print(f"error while reading config file at {config_path}")
-    print(e)
-    exit(3)
-
+  (cmd, config_path) = routine_args(sys.argv)
+  config = routine_load_config(config_path)
   cookies = routine_load_cookies(config['cookie_path'])
-
-  with ZeusRequest(BASE_URL, cookies) as zrq:
-    zrq.request_login(config['username'], config['password'])
-    routine_execute_command(cmd):
-    routine_store_cookies(config['cookie_path'])
+  with ZeusRequest(cookies) as zrq:
+    routine_execute_command(zrq, config, cmd)
+    routine_store_cookies(zrq.cookies, config)
