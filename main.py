@@ -408,20 +408,21 @@ def routine_load_cookies(path):
     with open(path, "rt") as f:
       return json.load(f)
   except (FileNotFoundError, json.decoder.JSONDecodeError):
-    return {}
+    return {} # especially when path == ''; indicating no cache store
   except OSError as e:
     print(f"error while reading cookie file '{path}'", file=sys.stderr)
     print(e, file=sys.stderr)
-    exit(3) # FIXME SHOULD WE
+    return {}
 
 def routine_store_cookies(cookies, config):
   try:
     with open(config['cookie_path'], "wt") as f:
       json.dump(cookies, f, indent=2)
+  except FileNotFoundError as e:
+    return # especially when path == ''; indicating no cache store
   except OSError as e:
     print(f"error while writing to cookie file '{path}'", file=sys.stderr)
     print(e, file=sys.stderr)
-    exit(3) # FIXME SHOULD WE?
 
 def routine_login(zrq, config):
   if config['verbose']: print("try loging in... ", end='', flush=True)
