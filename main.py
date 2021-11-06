@@ -3,126 +3,78 @@
 import http.client
 import base64
 import json
+import re
 from urllib.parse import urlencode, unquote # urlparse, parse_qs
 from datetime import datetime, time, timezone, timedelta
-
 
 #http://docs.tobesoft.com/advanced_development_guide_nexacro_17_ko#a5e1e2fb1080ae59
 def nexacro_ssv_encode(info, enc="utf-8"):
   rs = '\x1e' # record separator
   return f"SSV:{enc}{rs}" + rs.join(f"{f}={v}" for (f,v) in info)
 
-# TODO use regex if we want smaller code
-def nexacro_ssv_check_header(s):
-  ss = s.split(b':')
-  if len(ss) > 0 and ss[0] == b'SSV':
-    if len(ss) > 1:
-      if ss[1] not in [b"ascii", b"utf-8"]:
-        raise ValueError(f"unrecognized encoding '{s}'")
-    return
-  raise ValueError(f"header is not SSV format '{s}'")
+RE_H  = re.compile(b'SSV(:(?P<enc>utf-8|en_Us))?')
+RE_DH = re.compile(b'Dataset:(?P<did>\w+)')
+RE_V  = re.compile(b'(?P<vid>\w+)(:(?P<type>\w+)(\((?P<len>\d+)\))?)?(=(?P<val>.*))?', re.S)
+RE_CC = re.compile(b'(?P<ccid>\w+)(:(?P<type>\w+)(\((?P<len>\d+)\))?)?(=(?P<val>.*))?', re.S)
+RE_C  = re.compile(b'(?P<cid>\w+)(:(?P<type>\w+)(\((?P<len>\d+)\))?)?(:(?P<styp>\w+))?(:(?P<stxt>\w+))?')
 
-def nexacro_ssv_decode_typelen(s):
-  ss = s.split(b'(')
-  if len(ss) > 0:
-    if len(ss) > 1:
-      if len(ss[1]) == 0 or ss[1][-1] != b')':
-        raise ValueError(f"variable type is malformed '{s}'")
-      l = 0
-      try: l = int(ss[1][0:-1])
-      except ValueError as e:
-        raise ValueError(f"invalid length specifier '{ss[1][0:-1]}'")
-      return (ss[0], l)
-    return (ss[0], None)
-  raise ValueError(f"variable type is not SSV format '{s}'")
-
-def nexacro_ssv_decode_vid(s):
-  ss = s.split(b':')
-  if len(ss) > 0:
-    if ss[0] == b'':
-      raise ValueError(f"empty variable name in '{s}'")
-    if len(ss) > 1:
-      (t,l) = nexacro_ssv_decode_typelen(ss[1])
-      return (ss[0], t, l)
-    return (ss[0], None, None)
-  raise ValueError(f"variable id is not SSV format '{s}'")
-
-def nexacro_ssv_decode_variable(s):
-  ss = s.split(b'=')
-  if len(ss) > 0:
-    (vid, t, l)  = nexacro_ssv_decode_vid(ss[0])
-    if len(ss) > 1:
-      return (vid, ss[1], t, l)
-    return (vid, None, t, l)
-  raise ValueError(f"variable is not SSV format '{s}'")
+def regmat(pattern, s, name):
+  m = pattern.fullmatch(s)
+  if m: return m
+  raise ValueError(f"malformed {name}: '{s}'")
 
 def nexacro_ssv_decode_dataset(vs, i):
-  if len(vs) <= i:
-    raise ValueError(f"imcomplete dataset at {i}'th record")
-  ss = vs[i].split(b':')
-  if len(ss) < 2 or ss[0] != b'Dataset':
-    raise ValueError(f"malformed dataset header '{vs[i]}'")
-  if ss[1] == b'':
-    raise ValueError(f"empty dataset id in '{vs[i]}'")
-  did = ss[1]
+  def checki():
+    if len(vs) <= i: raise ValueError(f"imcomplete dataset at {i}'th record")
+
+  m = regmat(RE_DH, vs[i], 'dataset header')
+  did = m.group('did')
   i += 1
 
-  if len(vs) <= i:
-    raise ValueError(f"imcomplete dataset at {i}'th record")
-  if vs[i][0:7] == b'_Const_':
-    ss = vs[i].split(b'\x1f')
-    if len(ss) < 2 or ss[0] != b'_Const_':
-      raise ValueError(f"malformed const column infos '{vs[i]}'")
-    for s in ss[1:]:
-      (cid, v, t, l) = nexacro_ssv_decode_variable(s)
-      # TODO utilize ???
+  checki()
+  ccis = []
+  if vs[i][0:8] == b'_Const_\x1f':
+    for s in vs[i].split(b'\x1f')[1:]:
+      m = regmat(RE_CC, s, 'dataset const column info')
+      ccis.append((m.group('ccid'), m.group('val')))
     i += 1
 
-  if len(vs) <= i:
-    raise ValueError(f"imcomplete dataset at {i}'th record")
-  ss = vs[i].split(b'\x1f')
-  if len(ss) < 2 or ss[0] != b'_RowType_':
-    raise ValueError(f"malformed column infos '{vs[i]}'")
-  for s in ss[1:]:
-    pass
-    #(cid, v, t, l) = nexacro_ssv_decode_variable(s)
-    # TODO 3 type fields possible
-    # TODO utilize
+  checki()
+  cis = []
+  regmat(re.compile(b'^_RowType_\x1f'), vs[i][0:10], 'column infos')
+  for s in vs[i].split(b'\x1f')[1:]:
+    m = regmat(RE_C, s, 'dataset column info')
+    cis.append(m.group('cid'))
   i += 1
 
+  checki()
   rec = []
-  if len(vs) <= i:
-    raise ValueError(f"imcomplete dataset at {i}'th record")
-  while vs[i] != b'':
-    ss = vs[i].split(b'\x1f')
-    if len(ss) < 2:
+  while vs[i]:
+    if vs[i][0] not in b'NIUDO' or vs[i][1:2] != b'\x1f':
       raise ValueError(f"malformed dataset row '{vs[i]}'")
-    if ss[0] not in b'NIUDO':
-      raise ValueError(f"unrecognized rowtype in '{vs[i]}'")
-    rec.append([None if x == b'\x03' else x for x in ss])
+    rec.append([None if x == b'\x03' else x for x in vs[i][2:].split(b'\x1f')])
     i += 1
-    if len(vs) <= i:
-      raise ValueError(f"imcomplete dataset at {i}'th record")
+    checki()
 
   i += 1
-  return ((did, rec), i)
-
+  return ((did, rec, ccis, cis), i)
 
 def nexacro_ssv_decode(bs):
   vs = bs.split(b'\x1e')
-  nexacro_ssv_check_header(vs[0])
+
+  m = regmat(RE_H, vs[0], 'header')
+  encoding = m.group('enc') or 'ascii'
 
   ret = {}
   i = 1
   while i < len(vs):
-    if i == len(vs)-1 and vs[i] == b'':
-      break
+    if i == len(vs)-1 and vs[i] == b'': break
     elif vs[i][0:7] == b'Dataset':
-      ((did, rec), i) = nexacro_ssv_decode_dataset(vs, i)
-      ret[did] = rec
+      ((did, rec, ccis, cis), i) = nexacro_ssv_decode_dataset(vs, i)
+      ret[did] = (rec, ccis, cis)
     else:
-      (vid, value, t, l) = nexacro_ssv_decode_variable(vs[i])
-      ret[vid] = value
+      m = regmat(RE_V, vs[i], 'variable')
+      ret[m.group('vid')] = m.group('val')
       i += 1
 
   return ret
@@ -262,15 +214,15 @@ class ZeusRequest:
     if b'dsMain' not in ret:
       raise ValueError(f"expecting 'dsMain' got '{ret}'")
 
-    dept = 1; name = 2; stdno = 3; date = 4;
-    time = 5; temp = 6; sympt = 7;
-    spc_ctnt = 13; gubun = 14 #? = 15
+    dept = 0; name = 1; stdno = 2; date = 3;
+    time = 4; temp = 5; sympt = 6;
+    spc_ctnt = 12; gubun = 13 #? = 14
     recs = list(map(lambda row: {
       'timestamp': datetime.strptime(row[date]+row[time], '%Y%m%d%H:%M').replace(tzinfo=self.TIME_ZONE),
       'temperature': float(row[temp]),
       'symptoms': "".join("O" if x else "_" for x in row[sympt:sympt+6]),
       'significance': row[spc_ctnt]
-      }, map(lambda row: [v.decode("utf-8") for v in row], ret[b'dsMain'])))
+      }, map(lambda row: [v.decode("utf-8") for v in row], ret[b'dsMain'][0])))
     return recs
 
 
