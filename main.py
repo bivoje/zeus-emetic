@@ -32,11 +32,11 @@ def nexacro_ssv_decode_dataset(vs, i):
   i += 1
 
   checki()
-  ccis = []
+  ccis = {}
   if vs[i][0:8] == b'_Const_\x1f':
     for s in vs[i].split(b'\x1f')[1:]:
       m = regmat(RE_CC, s, 'dataset const column info')
-      ccis.append((m.group('ccid'), m.group('val')))
+      ccis[m.group('ccid')] = m.group('val')
     i += 1
 
   checki()
@@ -88,11 +88,11 @@ class ZeusRequest:
   BASE_URL = "zeus.gist.ac.kr"
 
   LOGIN_PATH  = "/sys/login/auth.do?callback="
-  SAVE_PATH   = "/amc/amcDailyTempRegE/save.do"
+  ROLE_PATH   = "/sys/main/role.do"
   SELECT_PATH = "/amc/amcDailyTempRegE/select.do"
+  SAVE_PATH   = "/amc/amcDailyTempRegE/save.do"
 
   SSV_GUBUN  = "AA"
-  SSV_DEPTCD = "0160"
   SSV_PGKEY  = "PERS07^PERS07_08^005^AmcDailyTempRegE"
 
   # copy & pasted from chrome inspector
@@ -171,13 +171,66 @@ class ZeusRequest:
       raise ConnectionError(f"login successfully failed. '{head}'")
 
 
-  def request_select(self):
+  def request_role(self):
     if 'WMONID' not in self.cookies:
       raise ConnectionRefusedError # need log-in
 
     info = [
       ('WMONID',    self.cookies['WMONID']),
-      ('dept_cd',   self.SSV_DEPTCD),
+      ('pg_key',    ""),
+      ('pg_nm',     ""),
+      ('page_open_time', ""),
+      ('page_open_time_on', ""),
+    ]
+
+    params = nexacro_ssv_encode(info)
+    headers = self.BASE_HEADERS.copy()
+    headers["Referer"] = 'https://' + self.BASE_URL + '/index.html'
+    headers["Accept"] = "*/*"
+    headers["Content-Type"] = "text/plain;charset=UTF-8"
+    headers["Cookie"] = self.cookie_demon()
+    headers.pop("X-Requested-With", None)
+
+    self.conn.request("POST", self.ROLE_PATH, params, headers)
+    response = self.conn.getresponse()
+    head = response.getheaders()
+    self.cookie_monster(head)
+    data = response.read()
+    self.last_response = response
+    self.last_data = data
+
+    if response.status != 200:
+      raise ConnectionError(
+        f"server returned {response.status}, {response.reason}")
+
+    ret = nexacro_ssv_decode(data)
+
+    if b'ErrorMsg' in ret:
+      if ret.get(b'ErrorCode', "") == b'4000':
+        raise ConnectionRefusedError # re-login needed
+      raise ConnectionError(ret[b'ErrorMsg'])
+
+    if b'dsUserRole' not in ret:
+      raise ValueError(f"expecting 'dsUserRole' got '{ret}'")
+
+    (recs, ccid, cid) = ret[b'dsUserRole']
+
+    try:
+      dcd = cid.index(b'BASE_DEPT_CD')
+      mbr = cid.index(b'MBR_NO')
+    except ValueError:
+      raise ValueError(f"role.do dataset fields inconsistent cid='{cid}' ccid='{ccid}'")
+
+    return (recs[0][dcd].decode('utf-8'), recs[0][mbr].decode('utf-8'))
+
+
+  def request_select(self, deptcd):
+    if 'WMONID' not in self.cookies:
+      raise ConnectionRefusedError # need log-in
+
+    info = [
+      ('WMONID',    self.cookies['WMONID']),
+      ('dept_cd',   deptcd),
       ('chk_dt',    datetime.now(self.TIME_ZONE).strftime('%Y%m')),
       ('pg_key',    self.SSV_PGKEY),
       ('page_open_time', ""),
@@ -226,14 +279,14 @@ class ZeusRequest:
     return recs
 
 
-  def request_save(self, student_id, symp={'temp':36.5}):
+  def request_save(self, mbrno, deptcd, symp={'temp':36.5}):
     if 'WMONID' not in self.cookies:
       raise ConnectionRefusedError # need log-in
 
     info = [
       ('WMONID',    self.cookies['WMONID']),
-      ('dept_cd',   self.SSV_DEPTCD),
-      ('mbr_no',    student_id),
+      ('dept_cd',   deptcd),
+      ('mbr_no',    mbrno),
       ('chk_dt',    datetime.now(self.TIME_ZONE).strftime('%Y-%m-%d')),
       ('temp',      f"{symp['temp']:.1f}"), # TODO catch error
       ('sympt_1',   'Y' if symp.get('cough', False) else 'N'),
@@ -274,6 +327,7 @@ class ZeusRequest:
         raise ConnectionRefusedError # re-login needed
       raise ConnectionError(ret[b'ErrorMsg'])
 
+    return ret
 
 def show_record(rec):
   s_date = rec['timestamp'].strftime('%Y-%m-%d')
@@ -373,16 +427,29 @@ def routine_login(zrq, config):
     exit(4)
   if config['verbose']: print("success")
 
+def routine_role(zrq, config):
+  if config['verbose']: print("getting role data ... ", end='', flush=True)
+  try:
+    (deptcd, mbrno) = zrq.request_role()
+  except ConnectionError as e:
+    if config['verbose']: print("failed")
+    print(e, file=sys.stderr)
+    exit(4)
+  if config['verbose']: print("success")
+
+  config['deptcd'] = deptcd
+  config['mbrno'] = mbrno
+
 def execute_command(zrq, config, cmd, ret=False):
   if cmd == "save":
     if config['verbose']: print("uploading temperature data... ", end='', flush=True)
-    ret = zrq.request_save(config['student_id'])
+    ret = zrq.request_save(config['mbrno'])
     if config['verbose']: print("success")
     if ret: return True
 
   elif cmd == "select":
     if config['verbose']: print("loading temperature data... ", end='', flush=True)
-    recs = zrq.request_select()
+    recs = zrq.request_select(config['deptcd'])
     if config['verbose']: print("success")
     if ret: return recs
     for rec in recs: print(show_record(rec)) # TODO only few records?
@@ -448,7 +515,6 @@ CONFIG_SCHEME = {
   'verbose': True,
   'username': str,
   'b64_password': str,
-  'student_id': str,
   'cookie_path': DEFAULT_COOKIE_PATH,
   'temperature': 36.5,
   'cough': False,
@@ -480,12 +546,12 @@ Commands:
 Config:
   config_path is optional. If omitted, default path will be used.
   config_file is JSON format. Most of the fields have defaults.
-  Required fields are 'username', 'b64_password' and 'student_id'.
+  The only required fields are 'username' and 'b64_password'.
   If config_path is -, config is read/written from/to stdin/stdout.
   Invoke 'config' with explicitly empty path to get default path.
 
   Brief explanation for each fields:
-    'username', 'b64_password' and 'student_id' are required as str.
+    'username' and 'b64_password'  are required as string.
       set 'b64_password' with `echo -n '<password>' | base64`.
     'cough', 'sore_throat', 'dyspnea', 'fever', 'no_smell_or_taste'
       and 'other_symptoms' are boolean switches for symptoms.
@@ -534,5 +600,7 @@ if __name__ == "__main__":
   cookies = routine_load_cookies(config['cookie_path'])
 
   with ZeusRequest(cookies) as zrq:
+    routine_login(zrq, config)
+    routine_role(zrq, config)
     routine_execute_command(zrq, config, cmd)
     routine_store_cookies(zrq.cookies, config)
