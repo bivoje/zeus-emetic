@@ -371,7 +371,7 @@ def load_config(path):
       # default value is not present, required field
       value_type = v
       if k not in config_loaded:
-        raise ValueError(f"field {k} is required but missing")
+        raise ValueError(f"field '{k}' is required but missing")
       value = config_loaded.pop(k, None)
     else:
       # default value is present, optional field
@@ -379,14 +379,14 @@ def load_config(path):
       value = config_loaded.pop(k, v)
 
     if not isinstance(value, value_type):
-      raise ValueError(f"field {k} should be of type {value_type.__name__} but is {value.__class__.__name__}")
+      raise ValueError(f"field '{k}' should be of type {value_type.__name__} but is {value.__class__.__name__}")
 
     config[k] = value
 
   if config_loaded: # config_loaded \notin DEFAULT_CONFIG
     entry = 'entry' if len(config_loaded) == 1 else 'entries'
     es = ', '.join(f"'{e}'" for e in config_loaded)
-    raise ValueError(f"unrecognized config {entry} {es}")
+    raise ValueError(f"unrecognized config {entry}: {es}")
 
   #return (config, config_loaded)
   return config # TODO should this function return resting (unrecognized) entries to the caller insted of hadling it by itself?
@@ -395,11 +395,11 @@ def load_config(path):
 def routine_load_config(path):
   try:
     return load_config(path)
-  except json.decoder.JSONDecodeError as e:
-    print(f"error while reading config. {e}", file=sys.stderr)
+  except (json.decoder.JSONDecodeError, ValueError) as e:
+    print(f"Error while reading config: {e}.", file=sys.stderr)
     exit(3)
   except OSError as e:
-    print(f"error while reading config file at {path}", file=sys.stderr)
+    print(f"Error while reading config file at {path}.", file=sys.stderr)
     print(e, file=sys.stderr)
     exit(3)
 
@@ -410,7 +410,7 @@ def routine_load_cookies(path):
   except (FileNotFoundError, json.decoder.JSONDecodeError):
     return {} # especially when path == ''; indicating no cache store
   except OSError as e:
-    print(f"error while reading cookie file '{path}'", file=sys.stderr)
+    print(f"Error while reading cookie file '{path}'.", file=sys.stderr)
     print(e, file=sys.stderr)
     return {}
 
@@ -421,7 +421,7 @@ def routine_store_cookies(cookies, config):
   except FileNotFoundError as e:
     return # especially when path == ''; indicating no cache store
   except OSError as e:
-    print(f"error while writing to cookie file '{path}'", file=sys.stderr)
+    print(f"Error while writing to cookie file '{path}'.", file=sys.stderr)
     print(e, file=sys.stderr)
 
 def routine_login(zrq, config):
@@ -476,7 +476,7 @@ def routine_execute_command(zrq, config, cmd, chance=2):
       chance -= 1
       routine_login(zrq, config)
     except NotImplementedError as e:
-      if config['verbose']: print(f"unknown command '{cmd}'")
+      if config['verbose']: print(f"Unknown command '{cmd}'.")
       exit(5)
 
 
