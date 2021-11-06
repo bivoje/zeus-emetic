@@ -332,7 +332,8 @@ def show_record(rec):
 
 def routine_args(argv):
   if len(argv) <= 1:
-    print("RTFM!", file=sys.stderr)
+    print("Need a command to be specified.", file=sys.stderr)
+    print("Use 'help' command to see usage.", file=sys.stderr)
     exit(1)
 
   cmd = argv[1]
@@ -460,7 +461,8 @@ def routine_execute_command(zrq, config, cmd, chance=2):
       chance -= 1
       routine_login(zrq, config)
     except NotImplementedError as e:
-      if config['verbose']: print(f"Unknown command '{cmd}'.")
+      print(f"Unknown command '{cmd}'.", file=sys.stderr)
+      print(f"Use 'help' command to see usage.", file=sys.stderr)
       exit(5)
 
 def routine_config_command(path):
@@ -503,11 +505,68 @@ CONFIG_SCHEME = {
   'other_symptoms': False,
 }
 
+HELP_MSG = """
+emeic - upload & view temperature data on zeus.gist.ac.kr
+
+Usage: emetic <command> [config_path]
+
+Commands:
+    save	Upload temperature data as configured
+    select	View temperature data of this month
+    check	Check if temperature data has already been uploaded
+    update	Upload temperature data only if not have been yet
+    config	Create config file with filled with default values
+    help	Print this help message
+
+  *NOTE* 'check' is glorified 'select'. 'update' is 'check' + 'save'.
+
+Config:
+  config_path is optional. If omitted, default path will be used.
+  config_file is JSON format. Most of the fields have defaults.
+  Only required fields are 'username', 'password' and 'student_id'.
+  If config_path is -, config is read/written from/to stdin/stdout.
+  Invoke 'config' with explicitly empty path to get default path.
+
+  Brief explanation for each fields:
+    'username', 'password' and 'student_id' are required as string.
+    'cough', 'sore_throat', 'dyspnea', 'fever', 'no_smell_or_taste'
+      and 'other_symptoms' are boolean switches for symptoms.
+    'temperature' is float value for body temperature.
+    'verbose' enables printing progress to stdout when set (default).
+    'cookie_path' is the path to store cookie data that involve
+      login token. emetic login per each request when set to ''.
+
+  *NOTE* setting 'verbose':false does not prevent emetic to report
+    error messages to stderr. Also, 'select' and 'help' commands
+    print to stdout regardless of 'verbose' option.
+
+Examples:
+    $ emetic config -                # print default config setting
+    $ emetic config ""               # print default config_path
+    $ emetic config path/to/cfg      # create default cfg at the path
+    $ emetic select                  # view records with default cfg
+    $ emetic check - < path/to/cfg   # check if upload needed
+    $ emetic update paht/to/cfg      # upload data if needed
+
+  *NOTE* you can use separate cfg for two students on a same machine
+
+  To make emetic run regularly, you may use cron(8) service.
+  `$ crontab -e` then paste following lines to the opened editor.
+    SHELL=/bin/bash
+    0 10 * * * sleep ${RANDOM:0:2}m; emetic update
+    0 20 * * * sleep ${RANDOM:0:2}m; emetic update
+  It will run `emetic update` command at 10:00 and 20:00 every day
+  with random delay under 100 miniutes.
+"""
+
 
 if __name__ == "__main__":
   (cmd, config_path) = routine_args(sys.argv)
   if cmd == 'config':
     routine_config_command(config_path)
+    exit(0)
+  if cmd == 'help':
+    print(HELP_MSG)
     exit(0)
 
   config = routine_load_config(config_path)
