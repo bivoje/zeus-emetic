@@ -433,33 +433,37 @@ def routine_login(zrq, config):
     exit(4)
   if config['verbose']: print("success")
 
-def execute_command(zrq, config, cmd):
+def execute_command(zrq, config, cmd, ret=False):
   if cmd == "save":
     if config['verbose']: print("uploading temperature data... ", end='', flush=True)
     ret = zrq.request_save(config['student_id'])
     if config['verbose']: print("success")
+    if ret: return True
 
   elif cmd == "select":
     if config['verbose']: print("loading temperature data... ", end='', flush=True)
     recs = zrq.request_select()
     if config['verbose']: print("success")
+    if ret: return recs
     for rec in recs: print(show_record(rec)) # TODO only few records?
 
-  elif cmd == "update":
-    if config['verbose']: print("loading temperature data... ", end='', flush=True)
-    recs = zrq.request_select()
-    if config['verbose']: print("success")
+  elif cmd == "check":
+    recs = execute_command(zrq, config, "select", ret=True)
 
     now = datetime.now(zrq.TIME_ZONE)
     checkpoint = datetime.combine(now, time(12,0), now.tzinfo)
     if (now - checkpoint).total_seconds() < 0:
       checkpoint = datetime.combine(now, time(0,0), now.tzinfo)
 
-    if any(rec['timestamp'] >= checkpoint for rec in recs):
-      if config['verbose']: print("temperature already recored")
-      return
+    check = any(rec['timestamp'] >= checkpoint for rec in recs)
+    if config['verbose']: print("temperature already recored" if check else "no record yet")
+    if ret: return check # TODO report with exit status?
 
-    execute_command(zrq, config, 'save')
+  elif cmd == "update":
+    if not execute_command(zrq, config, "check", ret=True):
+      execute_command(zrq, config, 'save')
+
+  else: raise NotImplementedError(cmd)
 
 def routine_execute_command(zrq, config, cmd, chance=2):
   while chance > 0:
@@ -470,6 +474,9 @@ def routine_execute_command(zrq, config, cmd, chance=2):
       if config['verbose']: print("login cookie rejected")
       chance -= 1
       routine_login(zrq, config)
+    except NotImplementedError as e:
+      if config['verbose']: print(f"unknown command '{cmd}'")
+      exit(5)
 
 
 import os
