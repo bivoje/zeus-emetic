@@ -505,6 +505,8 @@ CONFIG_SCHEME = {
   'other_symptoms': False,
 }
 
+VERSION_STR = '0.1.0'
+
 HELP_MSG = """
 emeic - upload & view temperature data on zeus.gist.ac.kr
 
@@ -516,6 +518,7 @@ Commands:
     check	Check if temperature data has already been uploaded
     update	Upload temperature data only if not have been yet
     config	Create config file with filled with default values
+    version	Print program version
     help	Print this help message
 
   *NOTE* 'check' is glorified 'select'. 'update' is 'check' + 'save'.
@@ -564,6 +567,9 @@ if __name__ == "__main__":
   (cmd, config_path) = routine_args(sys.argv)
   if cmd == 'config':
     routine_config_command(config_path)
+    exit(0)
+  if cmd == 'version':
+    print(VERSION_STR)
     exit(0)
   if cmd == 'help':
     print(HELP_MSG)
