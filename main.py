@@ -3,14 +3,7 @@
 import http.client
 import json
 from urllib.parse import urlencode, unquote # urlparse, parse_qs
-from datetime import datetime, timezone, timedelta
-
-
-def decode_xml_error(bs):
-  import xml.etree.ElementTree as elemTree
-  ret = elemTree.fromstring(bs)
-  err = ret.find(".//*[@id='ErrorMsg']").text
-  return err
+from datetime import datetime, time, timezone, timedelta
 
 
 #http://docs.tobesoft.com/advanced_development_guide_nexacro_17_ko#a5e1e2fb1080ae59
@@ -268,7 +261,16 @@ class ZeusRequest:
     if b'dsMain' not in ret:
       raise ValueError(f"expecting 'dsMain' got '{ret}'")
 
-    return ret
+    dept = 1; name = 2; stdno = 3; date = 4;
+    time = 5; temp = 6; sympt = 7;
+    spc_ctnt = 13; gubun = 14 #? = 15
+    recs = list(map(lambda row: {
+      'timestamp': datetime.strptime(row[date]+row[time], '%Y%m%d%H:%M').replace(tzinfo=self.TIME_ZONE),
+      'temperature': float(row[temp]),
+      'symptoms': "".join("O" if x else "_" for x in row[sympt:sympt+6]),
+      'significance': row[spc_ctnt]
+      }, map(lambda row: [v.decode("utf-8") for v in row], ret[b'dsMain'])))
+    return recs
 
 
   def request_save(self, student_id, symp={'temp':36.5}):
@@ -320,17 +322,13 @@ class ZeusRequest:
       raise ConnectionError(ret[b'ErrorMsg'])
 
 
-def select_dumps(ret):
-  dept = 1; name = 2; stdno = 3; date = 4;
-  time = 5; temp = 6; sympt = 7;
-  spc_ctnt = 13; gubun = 14
-  #?        = 15
-  for row_ in ret[b'dsMain'][0:10]:
-    row = [v.decode("utf-8") for v in row_]
-    s_date = f"{row[date][0:4]}-{row[date][4:6]}-{row[date][6:8]}"
-    s_sympt= "".join("O" if x else "_" for x in row[sympt:sympt+6])
-    print("\t".join([s_date, row[time], row[temp], s_sympt, row[spc_ctnt]])) # TODO return string
-
+def show_record(rec):
+  s_date = rec['timestamp'].strftime('%Y-%m-%d')
+  s_time = rec['timestamp'].strftime('%H:%M')
+  return "\t".join([
+    s_date, s_time, str(rec['temperature']),
+    rec['symptoms'], rec['significance']
+  ])
 
 def routine_args(argv):
   if len(argv) <= 1:
@@ -443,15 +441,25 @@ def execute_command(zrq, config, cmd):
 
   elif cmd == "select":
     if config['verbose']: print("loading temperature data... ", end='', flush=True)
-    ret = zrq.request_select()
+    recs = zrq.request_select()
     if config['verbose']: print("success")
-    select_dumps(ret)
+    for rec in recs: print(show_record(rec)) # TODO only few records?
 
-  elif cmd == "upd":
-    pass
-    #ret = zrq.request_select()
-    #for row in ret if strptime row[4]
-    #ret = zrq.request_save(config['student_id'])
+  elif cmd == "update":
+    if config['verbose']: print("loading temperature data... ", end='', flush=True)
+    recs = zrq.request_select()
+    if config['verbose']: print("success")
+
+    now = datetime.now(zrq.TIME_ZONE)
+    checkpoint = datetime.combine(now, time(12,0), now.tzinfo)
+    if (now - checkpoint).total_seconds() < 0:
+      checkpoint = datetime.combine(now, time(0,0), now.tzinfo)
+
+    if any(rec['timestamp'] >= checkpoint for rec in recs):
+      if config['verbose']: print("temperature already recored")
+      return
+
+    execute_command(zrq, config, 'save')
 
 def routine_execute_command(zrq, config, cmd, chance=2):
   while chance > 0:
@@ -475,5 +483,6 @@ if __name__ == "__main__":
   config = routine_load_config(config_path)
   cookies = routine_load_cookies(config['cookie_path'])
   with ZeusRequest(cookies) as zrq:
+    zrq = ZeusRequest(cookies)
     routine_execute_command(zrq, config, cmd)
     routine_store_cookies(zrq.cookies, config)
