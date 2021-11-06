@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import http.client
+import base64
 import json
 from urllib.parse import urlencode, unquote # urlparse, parse_qs
 from datetime import datetime, time, timezone, timedelta
@@ -412,7 +413,8 @@ def routine_store_cookies(cookies, config):
 def routine_login(zrq, config):
   if config['verbose']: print("try loging in... ", end='', flush=True)
   try:
-    ret = zrq.request_login(config['username'], config['password'])
+    password = base64.b64decode(config['b64_password'].encode('utf-8'))
+    ret = zrq.request_login(config['username'], password)
   except ConnectionError as e:
     if config['verbose']: print("failed")
     print(e, file=sys.stderr)
@@ -493,7 +495,7 @@ DEFAULT_COOKIE_PATH = os.environ['HOME']+"/.emetic_cookie"
 CONFIG_SCHEME = {
   'verbose': True,
   'username': str,
-  'password': str,
+  'b64_password': str,
   'student_id': str,
   'cookie_path': DEFAULT_COOKIE_PATH,
   'temperature': 36.5,
@@ -526,12 +528,13 @@ Commands:
 Config:
   config_path is optional. If omitted, default path will be used.
   config_file is JSON format. Most of the fields have defaults.
-  Only required fields are 'username', 'password' and 'student_id'.
+  Required fields are 'username', 'b64_password' and 'student_id'.
   If config_path is -, config is read/written from/to stdin/stdout.
   Invoke 'config' with explicitly empty path to get default path.
 
   Brief explanation for each fields:
-    'username', 'password' and 'student_id' are required as string.
+    'username', 'b64_password' and 'student_id' are required as str.
+      set 'b64_password' with `echo -n '<password>' | base64`.
     'cough', 'sore_throat', 'dyspnea', 'fever', 'no_smell_or_taste'
       and 'other_symptoms' are boolean switches for symptoms.
     'temperature' is float value for body temperature.
@@ -579,6 +582,5 @@ if __name__ == "__main__":
   cookies = routine_load_cookies(config['cookie_path'])
 
   with ZeusRequest(cookies) as zrq:
-    zrq = ZeusRequest(cookies)
     routine_execute_command(zrq, config, cmd)
     routine_store_cookies(zrq.cookies, config)

@@ -16,7 +16,7 @@ config: install
 	@read -p "username: " uid;\
 	read -p "password: " pw;\
 	read -p "student id: " sid;\
-	echo '{"username":"'$$uid'","password":"'$$pw'","student_id":"'$$sid'"}' > `$(install_path) config ""`
+	echo '{"username":"'$$uid'","b64_password":"'"`echo -n $$pw | base64`"'","student_id":"'$$sid'"}' > `$(install_path) config ""`
 	@echo `$(install_path) config ""` is created
 
 install: prepare
