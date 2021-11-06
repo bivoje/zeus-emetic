@@ -116,11 +116,18 @@ class ZeusRequest:
     "Accept-Language": 'ko-KR,ko;q=0.9',
   }
 
-  def __init__(self, cached_cookies={}):
+  def __init__(self, cache={}):
     self.conn = http.client.HTTPSConnection(self.BASE_URL);
-    self.cookies = cached_cookies
+    self.cookies = cache.get('cookies', {})
+    cache.pop('cookies', None)
+    self.cache = cache
     self.last_response = None
     self.last_data = None
+
+  def get_cache(self):
+    cache = self.cache.copy()
+    cache['cookies'] = self.cookies
+    return cache
 
   def __enter__(self):
     return self
@@ -224,13 +231,15 @@ class ZeusRequest:
     return (recs[0][dcd].decode('utf-8'), recs[0][mbr].decode('utf-8'))
 
 
-  def request_select(self, deptcd):
+  def request_select(self):
     if 'WMONID' not in self.cookies:
       raise ConnectionRefusedError # need log-in
+    if 'deptcd' not in self.cache:
+      raise ConnectionRefusedError
 
     info = [
       ('WMONID',    self.cookies['WMONID']),
-      ('dept_cd',   deptcd),
+      ('dept_cd',   self.cache['deptcd']),
       ('chk_dt',    datetime.now(self.TIME_ZONE).strftime('%Y%m')),
       ('pg_key',    self.SSV_PGKEY),
       ('page_open_time', ""),
@@ -279,14 +288,16 @@ class ZeusRequest:
     return recs
 
 
-  def request_save(self, mbrno, deptcd, symp={'temp':36.5}):
+  def request_save(self, symp={'temp':36.5}):
     if 'WMONID' not in self.cookies:
       raise ConnectionRefusedError # need log-in
+    if 'deptcd' not in self.cache or 'mbrno' not in self.cache:
+      raise ConnectionRefusedError
 
     info = [
       ('WMONID',    self.cookies['WMONID']),
-      ('dept_cd',   deptcd),
-      ('mbr_no',    mbrno),
+      ('dept_cd',   self.cache['deptcd']),
+      ('mbr_no',    self.cache['mbrno']),
       ('chk_dt',    datetime.now(self.TIME_ZONE).strftime('%Y-%m-%d')),
       ('temp',      f"{symp['temp']:.1f}"), # TODO catch error
       ('sympt_1',   'Y' if symp.get('cough', False) else 'N'),
@@ -395,25 +406,25 @@ def routine_load_config(path):
     print(e, file=sys.stderr)
     exit(3)
 
-def routine_load_cookies(path):
+def routine_load_cache(path):
   try:
     with open(path, "rt") as f:
       return json.load(f)
   except (FileNotFoundError, json.decoder.JSONDecodeError):
     return {} # especially when path == ''; indicating no cache store
   except OSError as e:
-    print(f"Error while reading cookie file '{path}'.", file=sys.stderr)
+    print(f"Error while reading cache file '{path}'.", file=sys.stderr)
     print(e, file=sys.stderr)
     return {}
 
-def routine_store_cookies(cookies, config):
+def routine_store_cache(cache, config):
   try:
-    with open(config['cookie_path'], "wt") as f:
-      json.dump(cookies, f, indent=2)
+    with open(config['cache_path'], "wt") as f:
+      json.dump(cache, f, indent=2)
   except FileNotFoundError as e:
     return # especially when path == ''; indicating no cache store
   except OSError as e:
-    print(f"Error while writing to cookie file '{path}'.", file=sys.stderr)
+    print(f"Error while writing to cache file '{path}'.", file=sys.stderr)
     print(e, file=sys.stderr)
 
 def routine_login(zrq, config):
@@ -437,19 +448,19 @@ def routine_role(zrq, config):
     exit(4)
   if config['verbose']: print("success")
 
-  config['deptcd'] = deptcd
-  config['mbrno'] = mbrno
+  zrq.cache['deptcd'] = deptcd
+  zrq.cache['mbrno'] = mbrno
 
 def execute_command(zrq, config, cmd, ret=False):
   if cmd == "save":
     if config['verbose']: print("uploading temperature data... ", end='', flush=True)
-    ret = zrq.request_save(config['mbrno'])
+    ret = zrq.request_save()
     if config['verbose']: print("success")
     if ret: return True
 
   elif cmd == "select":
     if config['verbose']: print("loading temperature data... ", end='', flush=True)
-    recs = zrq.request_select(config['deptcd'])
+    recs = zrq.request_select()
     if config['verbose']: print("success")
     if ret: return recs
     for rec in recs: print(show_record(rec)) # TODO only few records?
@@ -463,7 +474,7 @@ def execute_command(zrq, config, cmd, ret=False):
       checkpoint = datetime.combine(now, time(0,0), now.tzinfo)
 
     check = any(rec['timestamp'] >= checkpoint for rec in recs)
-    if config['verbose']: print("temperature already recored" if check else "no record yet")
+    if config['verbose']: print("temperature already recorded" if check else "no record yet")
     if ret: return check # TODO report with exit status?
 
   elif cmd == "update":
@@ -481,6 +492,7 @@ def routine_execute_command(zrq, config, cmd, chance=2):
       if config['verbose']: print("login cookie rejected")
       chance -= 1
       routine_login(zrq, config)
+      routine_role(zrq, config)
     except NotImplementedError as e:
       print(f"Unknown command '{cmd}'.", file=sys.stderr)
       print(f"Use 'help' command to see usage.", file=sys.stderr)
@@ -509,13 +521,13 @@ import os
 import sys
 
 DEFAULT_CONFIG_PATH = os.environ['HOME']+"/.emetic_config"
-DEFAULT_COOKIE_PATH = os.environ['HOME']+"/.emetic_cookie"
+DEFAULT_CACHE_PATH  = os.environ['HOME']+"/.emetic_cache"
 
 CONFIG_SCHEME = {
   'verbose': True,
   'username': str,
   'b64_password': str,
-  'cookie_path': DEFAULT_COOKIE_PATH,
+  'cache_path': DEFAULT_CACHE_PATH,
   'temperature': 36.5,
   'cough': False,
   'sore_throat': False,
@@ -556,9 +568,9 @@ Config:
     'cough', 'sore_throat', 'dyspnea', 'fever', 'no_smell_or_taste'
       and 'other_symptoms' are boolean switches for symptoms.
     'temperature' is float value for body temperature.
-    'verbose' enables printing progress to stdout when set (default).
-    'cookie_path' is the path to store cookie data that involve
-      login token. emetic login per each request when set to ''.
+    'verbose' enables printing progress to stdout when set(default).
+    'cache_path'. cache contains login token cookie, user info, etc.
+      emetic logins or querys  per each request when set to ''.
 
   *NOTE* setting 'verbose':false does not prevent emetic to report
     error messages to stderr. Also, 'select' and 'help' commands
@@ -597,10 +609,7 @@ if __name__ == "__main__":
     exit(0)
 
   config = routine_load_config(config_path)
-  cookies = routine_load_cookies(config['cookie_path'])
-
-  with ZeusRequest(cookies) as zrq:
-    routine_login(zrq, config)
-    routine_role(zrq, config)
+  cache  = routine_load_cache(config['cache_path'])
+  with ZeusRequest(cache) as zrq:
     routine_execute_command(zrq, config, cmd)
-    routine_store_cookies(zrq.cookies, config)
+    routine_store_cache(zrq.get_cache(), config)

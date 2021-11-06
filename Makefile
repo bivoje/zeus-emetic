@@ -1,3 +1,4 @@
+SHELL := /bin/bash # for read -s option
 
 install_path = /usr/bin/emetic
 cronjob = '0 10 * * * sleep $${RANDOM:0:2}m; emetic update\n0 20 * * * sleep $${RANDOM:0:2}m; emetic update'
@@ -7,16 +8,15 @@ setup: config crontab
 crontab: install
 	@#echo 'a\n0 10 * * * sleep $${RANDOM:0:2}m; emetic update\n0 20 * * * sleep $${RANDOM:0:2}m; emetic update\n.\nwq\n' | cat #EDITOR=ed crontab -e
 	@# $$ in bash is process number which would be unique when it is run
-	echo "`crontab -l | grep -v emetic`""\n"$(cronjob) > /tmp/$$$$;\
+	echo -e "`crontab -l | grep -v emetic`""\n"$(cronjob) > /tmp/$$$$;\
 	crontab /tmp/$$$$;\
 	rm /tmp/$$$$
 	@echo "crontab job installed"
 
 config: install
 	@read -p "username: " uid;\
-	read -p "password: " pw;\
-	read -p "student id: " sid;\
-	echo '{"username":"'$$uid'","b64_password":"'"`echo -n $$pw | base64`"'","student_id":"'$$sid'"}' > `$(install_path) config ""`
+	read -s -p "password: " pw;\
+	echo '{"username":"'$$uid'","b64_password":"'"`echo -n $$pw | base64`"'"}' > `$(install_path) config ""`
 	@echo `$(install_path) config ""` is created
 
 install: prepare
