@@ -348,25 +348,9 @@ def load_config(path):
   with open(path, "rt") as f:
     config_loaded = json.load(f)
 
-  DEFAULT_CONFIG = {
-    'verbose': True,
-    'username': str,
-    'password': str,
-    'student_id': str,
-    'cookie_path': DEFAULT_COOKIE_PATH,
-    'temperature': 36.5,
-    'cough': False,
-    'sore_throat': False,
-    'dyspnea': False,
-    'fever': False,
-    'no_smell_or_taste': False,
-    'other_symptoms': False,
-  #}.update(config_loaded)
-  }
-
   config = {}
 
-  for (k,v) in DEFAULT_CONFIG.items():
+  for (k,v) in CONFIG_SCHEME.items():
     if isinstance(v, type):
       # default value is not present, required field
       value_type = v
@@ -383,7 +367,7 @@ def load_config(path):
 
     config[k] = value
 
-  if config_loaded: # config_loaded \notin DEFAULT_CONFIG
+  if config_loaded: # config_loaded \notin CONFIG_SCHEME
     entry = 'entry' if len(config_loaded) == 1 else 'entries'
     es = ', '.join(f"'{e}'" for e in config_loaded)
     raise ValueError(f"unrecognized config {entry}: {es}")
@@ -479,6 +463,24 @@ def routine_execute_command(zrq, config, cmd, chance=2):
       if config['verbose']: print(f"Unknown command '{cmd}'.")
       exit(5)
 
+def routine_config_command(path):
+  if not path:
+    print(DEFAULT_CONFIG_PATH)
+    return
+
+  config = {}
+  for (f,v) in CONFIG_SCHEME.items():
+    config[f] = None if isinstance(v, type) else v
+
+  try:
+    with sys.stdout if path == '-' else open(path, "wt") as f:
+      json.dump(config, f, indent = 2)
+      print("", file=f)
+  except OSError as e:
+    print(f"Error while writing to config file '{path}'.", file=sys.stderr)
+    print(e, file=sys.stderr)
+    exit(6)
+
 
 import os
 import sys
@@ -486,10 +488,31 @@ import sys
 DEFAULT_CONFIG_PATH = os.environ['HOME']+"/.emetic_config"
 DEFAULT_COOKIE_PATH = os.environ['HOME']+"/.emetic_cookie"
 
+CONFIG_SCHEME = {
+  'verbose': True,
+  'username': str,
+  'password': str,
+  'student_id': str,
+  'cookie_path': DEFAULT_COOKIE_PATH,
+  'temperature': 36.5,
+  'cough': False,
+  'sore_throat': False,
+  'dyspnea': False,
+  'fever': False,
+  'no_smell_or_taste': False,
+  'other_symptoms': False,
+}
+
+
 if __name__ == "__main__":
   (cmd, config_path) = routine_args(sys.argv)
+  if cmd == 'config':
+    routine_config_command(config_path)
+    exit(0)
+
   config = routine_load_config(config_path)
   cookies = routine_load_cookies(config['cookie_path'])
+
   with ZeusRequest(cookies) as zrq:
     zrq = ZeusRequest(cookies)
     routine_execute_command(zrq, config, cmd)
