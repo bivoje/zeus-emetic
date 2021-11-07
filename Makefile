@@ -1,7 +1,7 @@
 SHELL := /bin/bash # for read -s option
 
 install_path = /usr/bin/emetic
-cronjob = '0 10 * * * sleep $${RANDOM:0:2}m; emetic update\n0 20 * * * sleep $${RANDOM:0:2}m; emetic update'
+cronjob = 'SHELL=/bin/bash\n0 10 * * * sleep $${RANDOM:0:2}m; emetic update\n0 20 * * * sleep $${RANDOM:0:2}m; emetic update'
 
 setup: config crontab
 
