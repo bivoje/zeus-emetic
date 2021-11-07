@@ -406,8 +406,9 @@ def routine_load_config(path):
     print(e, file=sys.stderr)
     exit(3)
 
-def routine_load_cache(path):
+def routine_load_cache(config):
   try:
+    path = config['cache_path'].replace("~", os.environ['HOME'])
     with open(path, "rt") as f:
       return json.load(f)
   except (FileNotFoundError, json.decoder.JSONDecodeError):
@@ -419,7 +420,8 @@ def routine_load_cache(path):
 
 def routine_store_cache(cache, config):
   try:
-    with open(config['cache_path'], "wt") as f:
+    path = config['cache_path'].replace("~", os.environ['HOME'])
+    with open(path, "wt") as f:
       json.dump(cache, f, indent=2)
   except FileNotFoundError as e:
     return # especially when path == ''; indicating no cache store
@@ -609,7 +611,7 @@ if __name__ == "__main__":
     exit(0)
 
   config = routine_load_config(config_path)
-  cache  = routine_load_cache(config['cache_path'])
+  cache  = routine_load_cache(config)
   with ZeusRequest(cache) as zrq:
     routine_execute_command(zrq, config, cmd)
     routine_store_cache(zrq.get_cache(), config)
