@@ -21,12 +21,12 @@ config: install
 
 install: prepare
 	@if ! [ -e $(install_path) ]; then\
-		sudo cp main.py $(install_path);\
+		cp main.py $(install_path);\
 		echo "installed in `which emetic`";\
 	fi
 
 prepare:
-	sudo apt install bash cron python3
+	#sudo apt install bash cron python3
 
 reset: uninstall
 	@# $$ in bash is process number which would be unique when it is run
